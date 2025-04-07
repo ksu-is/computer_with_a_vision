@@ -14,5 +14,5 @@
 ### Repository Research
 - [x] Find an OpenCV parkinglot repository on the Github database
 - [x] Clone code to our team and evauluate code from Github repository 
-- [x] Attempt to run the cloned code and documented issues/notes
-      - 
+- [x] Attempt to run the cloned code 
+      - The repository William found was able to run and used a video of a parking lot to test
