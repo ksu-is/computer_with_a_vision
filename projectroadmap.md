@@ -16,4 +16,5 @@
 - [x] Clone code to our team and evauluate code from Github repository 
 - [x] Attempt to run the cloned code 
  - The repository William found was able to run and used a video of a parking lot to test
- - 
+ - The repository Jacob found was not able to run with an example video
+ 
