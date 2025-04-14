@@ -15,6 +15,11 @@
 - [x] Find an OpenCV parkinglot repository on the Github database
 - [x] Clone code to our team and evauluate code from Github repository 
 - [x] Attempt to run the cloned code 
- - The repository William found was able to run and used a video of a parking lot to test: parking_lot_monitoring_system_OpenCV
- - The repository Jacob found was not able to run with an example video: AIEnabledCarParking_OpenCV
- 
+ - [x] The repository William found was able to run and used a video of a parking lot to test: parking_lot_monitoring_system_OpenCV
+ - [x] The repository Jacob found was not able to run with an example video: AIEnabledCarParking_OpenCV
+### Creating the Program  
+- Download open CV on both William and Jacob's Machines
+- Using the repository as a reference create a program that can recognize spaces in a photo
+- Be able to recognize those spaces as occupied or not
+- Display a count of spaces to how many are occupied
+
