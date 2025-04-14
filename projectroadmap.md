@@ -22,7 +22,7 @@
     - [x] Test the ability to push and pull our VS commitments 
     - [x] update the new code file with all of our changes
 - Download open CV on both William and Jacob's Machines
-- Using the repository as a reference create a program that can recognize spaces in a photo
-- Be able to recognize those spaces as occupied or not
-- Display a count of spaces to how many are occupied
+- [x] Using the repository as a reference create a program that can recognize spaces in a photo
+- [x] Be able to recognize those spaces as occupied or not
+- [x] Display a count of spaces to how many are occupied
 
