@@ -2,7 +2,7 @@ import cv2
 import pickle
 
 # Load image
-image_path = 'T-T-Parking-3-1.jpg'
+image_path = 'new_parking_lot.jpg'
 img = cv2.imread(image_path)
 img = cv2.resize(img, (1280, 720))
 img_copy = img.copy()
