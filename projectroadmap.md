@@ -25,4 +25,5 @@
 - [x] Using the repository as a reference create a program that can recognize spaces in a photo
 - [x] Be able to recognize those spaces as occupied or not
 - [x] Display a count of spaces to how many are occupied
+- [] Test on an overhead image to see if the program runs better from that perspective
 
