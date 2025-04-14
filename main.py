@@ -36,17 +36,14 @@ for idx, (x1, y1, x2, y2) in enumerate(rectangles, 1):
     edge_score_weight = edge_score / 5000  # normalize
     brightness_score_weight = 1 - (brightness / 255)  # darker = higher weight
 
-    combined_score = edge_score_weight * 0.7 + brightness_score_weight * 0.3
-
-    # Threshold (tune this if needed)
-    if combined_score > 0.5:
+    score = edge_count / 1500 + (brightness / 255)
+    if score > 1.2:
         status = "Occupied"
         color = (0, 0, 255)
     else:
         status = "Free"
         color = (0, 255, 0)
         free_spaces += 1
-
     # Draw and log
     print(f"{'✅' if status == 'Free' else '❌'} Spot {idx}: {status} | Edges: {edge_score} | Brightness: {brightness:.1f} | Score: {combined_score:.2f}")
     cv2.rectangle(img_display, (x1, y1), (x2, y2), color, 2)
