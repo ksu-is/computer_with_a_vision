@@ -2,8 +2,10 @@ import cv2
 import pickle
 
 # Load image
-image_path = 'new_parking_lot.jpg'
-img = cv2.imread(image_path)
+img = cv2.imread("new_parking_lot.jpg")
+if img is None:
+    raise FileNotFoundError("❌ Couldn't load 'new_parking_lot.jpg'. Make sure it's in the project folder and the name is correct.")
+
 img = cv2.resize(img, (1280, 720))
 img_copy = img.copy()
 
