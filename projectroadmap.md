@@ -18,8 +18,12 @@
  - [x] The repository William found was able to run and used a video of a parking lot to test: parking_lot_monitoring_system_OpenCV
  - [x] The repository Jacob found was not able to run with an example video: AIEnabledCarParking_OpenCV
 ### Creating the Program  
+- [x] Clone the repository to our machines so that we can commit directly from VS code to github
+    - [x] Test the ability to push and pull our VS commitments 
+    - [x] update the new code file with all of our changes
 - Download open CV on both William and Jacob's Machines
-- Using the repository as a reference create a program that can recognize spaces in a photo
-- Be able to recognize those spaces as occupied or not
-- Display a count of spaces to how many are occupied
+- [x] Using the repository as a reference create a program that can recognize spaces in a photo
+- [x] Be able to recognize those spaces as occupied or not
+- [x] Display a count of spaces to how many are occupied
+- [] Test on an overhead image to see if the program runs better from that perspective
 
