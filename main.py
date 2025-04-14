@@ -1,8 +1,7 @@
 import cv2
 import numpy as np
-
+#Jacob Testing#
 print("Loading parking lot image...")
-
 img = cv2.imread("T-T-Parking-3-1.jpg")
 if img is None:
     raise FileNotFoundError("❌ Image not found. Make sure the image is in the same folder as this script.")
