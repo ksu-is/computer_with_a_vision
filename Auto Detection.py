@@ -2,7 +2,6 @@ import cv2
 import numpy as np
 import pickle
 import os
-import sys
 from datetime import datetime
 
 # Fixed image path for your project
@@ -12,11 +11,10 @@ SPOTS_PATH = "parking_spots.pkl"
 class ParkingLotAnalyzer:
     def __init__(self, config=None):
         self.config = config or {
-            'edge_weight': 0.5,
-            'brightness_weight': 0.15,
-            'saturation_weight': 0.15,
-            'texture_weight': 0.2, 
-            'occupation_threshold': 0.42,  # Lowered to catch more occupied spots
+            'edge_weight': 0.6,
+            'brightness_weight': 0.2,
+            'saturation_weight': 0.2,
+            'occupation_threshold': 0.55,
             'resize_dimensions': (1280, 720),
             'show_details': True
         }
@@ -33,7 +31,7 @@ class ParkingLotAnalyzer:
         """Load the parking spot coordinates"""
         if not os.path.exists(spots_path):
             print(f"Parking spots file not found: {spots_path}")
-            print("Running spot definition tool first...")
+            print("Please define parking spots first...")
             return define_parking_spots(IMAGE_PATH, spots_path)
             
         with open(spots_path, "rb") as f:
@@ -50,92 +48,38 @@ class ParkingLotAnalyzer:
         edges_lap = cv2.Laplacian(blur, cv2.CV_64F)
         edges_lap = np.uint8(np.absolute(edges_lap))
         
-        edges_canny = cv2.Canny(blur, 30, 150)  # Lower threshold to catch more edges
+        edges_canny = cv2.Canny(blur, 50, 150)
         edges = cv2.addWeighted(edges_lap, 0.5, edges_canny, 0.5, 0)
-        
-        # Create a texture map using LBP-like approach for vehicle texture detection
-        texture = np.zeros_like(gray)
-        h, w = gray.shape
-        for i in range(1, h-1):
-            for j in range(1, w-1):
-                # Simple texture descriptor based on local binary pattern concept
-                center = gray[i, j]
-                code = 0
-                if gray[i-1, j-1] > center: code += 1
-                if gray[i-1, j] > center: code += 2
-                if gray[i-1, j+1] > center: code += 4
-                if gray[i, j+1] > center: code += 8
-                if gray[i+1, j+1] > center: code += 16
-                if gray[i+1, j] > center: code += 32
-                if gray[i+1, j-1] > center: code += 64
-                if gray[i, j-1] > center: code += 128
-                texture[i, j] = code % 16  # Simplified pattern
         
         return {
             'gray': gray,
             'hsv': hsv,
             'blur': blur,
-            'edges': edges,
-            'texture': texture
+            'edges': edges
         }
     
-    def compute_edge_variability(self, roi_gray):
-        """Compute the variability of edges in a region (cars have more variable edges)"""
-        if roi_gray.size <= 1:
-            return 0
-            
-        grad_x = cv2.Sobel(roi_gray, cv2.CV_64F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(roi_gray, cv2.CV_64F, 0, 1, ksize=3)
-        grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-        
-        # Standard deviation of gradient magnitudes indicates variability (vehicles have higher values)
-        return np.std(grad_mag)
-    
     def analyze_spot(self, processed_images, spot_coords):
-        """Analyze a single parking spot with improved detection"""
+        """Analyze a single parking spot"""
         x1, y1, x2, y2 = spot_coords
         
         # Extract ROIs
         roi_edge = processed_images['edges'][y1:y2, x1:x2]
         roi_gray = processed_images['gray'][y1:y2, x1:x2]
         roi_hsv = processed_images['hsv'][y1:y2, x1:x2]
-        roi_texture = processed_images['texture'][y1:y2, x1:x2]
         
-        # Basic features
+        # Extract features
         edge_density = cv2.countNonZero(roi_edge) / (roi_edge.shape[0] * roi_edge.shape[1])
         brightness = np.mean(roi_gray) / 255
         saturation = np.mean(roi_hsv[:,:,1]) / 255
         
-        # Additional features for better accuracy
-        texture_variance = np.std(roi_texture) / 16.0  # Normalized texture variance
-        edge_variability = self.compute_edge_variability(roi_gray) / 100.0  # Normalized edge variability
-        
-        # Detect shadows by looking at value (V) channel
-        value_channel = roi_hsv[:,:,2]
-        shadow_percentage = np.sum(value_channel < 100) / value_channel.size
-        
-        # Calculate improved occupation score
-        texture_score = (texture_variance + edge_variability) * self.config['texture_weight']
+        # Calculate occupation score (weighted combination of features)
         edge_score = edge_density * self.config['edge_weight']
-        brightness_score = (1 - brightness) * self.config['brightness_weight']
-        saturation_score = saturation * self.config['saturation_weight']
+        brightness_score = (1 - brightness) * self.config['brightness_weight']  # darker spots are typically occupied
+        saturation_score = saturation * self.config['saturation_weight']  # more color often means a car is present
         
-        # Add shadow bonus to catch dark cars
-        shadow_bonus = shadow_percentage * 0.1
+        occupation_score = edge_score + brightness_score + saturation_score
         
-        # Combined score with improved weighting
-        occupation_score = edge_score + brightness_score + saturation_score + texture_score + shadow_bonus
-        
-        # Check for specific patterns indicating vehicles
-        # 1. Light vehicles (white/silver cars) have high brightness but also high edge variability
-        if brightness > 0.6 and edge_variability > 0.35:
-            occupation_score += 0.1  # Boost score for likely light-colored vehicles
-            
-        # 2. Dark vehicles have low brightness and high saturation
-        if brightness < 0.4 and shadow_percentage > 0.3:
-            occupation_score += 0.1  # Boost score for likely dark vehicles
-            
-        # Determine status with adjusted threshold
+        # Determine status
         is_occupied = occupation_score > self.config['occupation_threshold']
         
         return {
@@ -143,9 +87,6 @@ class ParkingLotAnalyzer:
             'edge_density': edge_density,
             'brightness': brightness,
             'saturation': saturation,
-            'texture_variance': texture_variance,
-            'edge_variability': edge_variability,
-            'shadow_percentage': shadow_percentage,
             'score': occupation_score
         }
     
@@ -170,10 +111,6 @@ class ParkingLotAnalyzer:
             # Add spot number
             cv2.putText(img_display, f"{idx}", (x1 + 5, y1 + 20),
                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # Display the score on the image
-            cv2.putText(img_display, f"{data['score']:.2f}", (x1 + 5, y2 - 5),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         
         # Add summary information
         cv2.putText(img_display, f"Free: {free_spaces}/{total_spaces}", (30, 40),
@@ -196,8 +133,7 @@ class ParkingLotAnalyzer:
             print(f"{status_icon} Spot {idx}: {status} | " +
                   f"Edges: {data['edge_density']:.3f} | " +
                   f"Brightness: {data['brightness']:.3f} | " +
-                  f"Texture: {data['texture_variance']:.3f} | " +
-                  f"Shadow: {data['shadow_percentage']:.3f} | " +
+                  f"Saturation: {data['saturation']:.3f} | " +
                   f"Score: {data['score']:.3f}")
         
         # Summary
@@ -231,61 +167,10 @@ class ParkingLotAnalyzer:
         
         # Display result
         cv2.imshow("Parking Spot Detection", result_image)
-        print("\nPress any key to exit...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         
         return spots_data, result_image
-
-    def manual_correction(self, image_path, spots_path, spots_data, rectangles):
-        """Allow manual correction of spot statuses"""
-        img = self.load_image(image_path)
-        img_display = img.copy()
-
-        # Draw rectangles and add information
-        for idx, (rect, data) in enumerate(zip(rectangles, spots_data), 1):
-            x1, y1, x2, y2 = rect
-            
-            # Color based on occupancy
-            color = (0, 0, 255) if data['occupied'] else (0, 255, 0)
-            
-            # Draw rectangle
-            cv2.rectangle(img_display, (x1, y1), (x2, y2), color, 2)
-            
-            # Add spot number
-            cv2.putText(img_display, f"{idx}", (x1 + 5, y1 + 20),
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-
-        # Display instructions
-        print("\n=== Manual Correction ===")
-        print("Enter spot numbers to toggle their status (comma-separated)")
-        print("For example, enter '4,33,40,46' to toggle spots 4, 33, 40, and 46")
-        print("Press Enter when done")
-
-        cv2.imshow("Manual Correction", img_display)
-        cv2.waitKey(1)  # Update display
-
-        user_input = input("Spots to toggle: ")
-        if user_input.strip():
-            try:
-                spots_to_toggle = [int(s.strip()) for s in user_input.split(",")]
-                for spot_num in spots_to_toggle:
-                    if 1 <= spot_num <= len(spots_data):
-                        # Toggle the spot status
-                        spots_data[spot_num-1]['occupied'] = not spots_data[spot_num-1]['occupied']
-                        print(f"Toggled spot {spot_num} to {'occupied' if spots_data[spot_num-1]['occupied'] else 'free'}")
-                    else:
-                        print(f"Invalid spot number: {spot_num}")
-            except ValueError:
-                print("Invalid input. No changes made.")
-
-        # Display updated results
-        img_display = self.visualize_results(img, spots_data, rectangles)
-        cv2.imshow("Updated Results", img_display)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-        return spots_data
 
 def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     """Interactive tool to define parking spots on an image"""
@@ -377,62 +262,34 @@ def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     cv2.destroyAllWindows()
     return rectangles
 
-# Force specific problematic spots to be marked as occupied
-def manually_override_spots(spots_data):
-    """Manually override problematic spots based on feedback"""
-    problem_spots = [4, 33, 40, 46]  # 1-indexed spots that should be occupied
-    
-    for spot_num in problem_spots:
-        if 1 <= spot_num <= len(spots_data):
-            # Override to occupied
-            spots_data[spot_num-1]['occupied'] = True
-            print(f"Manually overrode spot {spot_num} to occupied")
-    
-    return spots_data
-
-if __name__ == "__main__":
+def main():
+    """Main function to run when script is executed"""
     print("Parking Spot Detection Program")
     print(f"Using image: {IMAGE_PATH}")
     
-    # Check if the image exists
-    if not os.path.exists(IMAGE_PATH):
-        print(f"Error: Image file '{IMAGE_PATH}' not found!")
-        sys.exit(1)
-    
     # Check if spots file exists
     if not os.path.exists(SPOTS_PATH):
-        print("No parking spots defined yet.")
-        print("Do you want to:")
-        print("1. Define parking spots manually")
-        print("2. Use pre-defined spots from existing analysis")
+        print("No parking spots defined yet. Opening spot definition tool...")
+        define_parking_spots(IMAGE_PATH, SPOTS_PATH)
+    
+    # Ask user what they want to do
+    while True:
+        print("\nOptions:")
+        print("1. Define/redefine parking spots")
+        print("2. Analyze parking lot")
+        print("3. Exit")
         
-        choice = input("Enter your choice (1-2): ")
+        choice = input("Enter your choice (1-3): ")
         
         if choice == '1':
             define_parking_spots(IMAGE_PATH, SPOTS_PATH)
         elif choice == '2':
-            print("Using existing spots from analysis...")
+            analyzer = ParkingLotAnalyzer()
+            analyzer.analyze_parking_lot(IMAGE_PATH, SPOTS_PATH)
+        elif choice == '3':
+            break
         else:
-            print("Invalid choice. Exiting.")
-            sys.exit(1)
-    
-    # Analyze the parking lot
-    analyzer = ParkingLotAnalyzer()
-    rectangles = analyzer.load_parking_spots(SPOTS_PATH)
-    spots_data, result_image = analyzer.analyze_parking_lot(IMAGE_PATH, SPOTS_PATH)
-    
-    # Apply manual overrides for problematic spots
-    spots_data = manually_override_spots(spots_data)
-    
-    # Visualize results again with overrides
-    result_image = analyzer.visualize_results(analyzer.load_image(IMAGE_PATH), spots_data, rectangles)
-    cv2.imshow("Parking Spot Detection (With Overrides)", result_image)
-    
-    # Ask if user wants to manually correct any spots
-    print("\nDo you want to manually correct any spot statuses? (y/n)")
-    user_input = input()
-    if user_input.lower().startswith('y'):
-        spots_data = analyzer.manual_correction(IMAGE_PATH, SPOTS_PATH, spots_data, rectangles)
-    
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+            print("Invalid choice. Please try again.")
+
+if __name__ == "__main__":
+    main()
