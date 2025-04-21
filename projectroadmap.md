@@ -25,5 +25,7 @@
 - [x] Using the repository as a reference create a program that can recognize spaces in a photo
 - [x] Be able to recognize those spaces as occupied or not
 - [x] Display a count of spaces to how many are occupied
-- [] Test on an overhead image to see if the program runs better from that perspective
+- [x] Test on an overhead image in main.py to see if the program runs better from that perspective
+      - Tested the overhead image with the newly drawn in detection rectangles. It was decently accurate but did not   detect vehicles with darker colors.
+- [x] Update detection parameters in main.py to increase recognition accuracy
 
