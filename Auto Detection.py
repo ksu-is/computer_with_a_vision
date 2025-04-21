@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import pickle
 import os
+import sys
 from datetime import datetime
 
 # Fixed image path for your project
@@ -31,7 +32,7 @@ class ParkingLotAnalyzer:
         """Load the parking spot coordinates"""
         if not os.path.exists(spots_path):
             print(f"Parking spots file not found: {spots_path}")
-            print("Please define parking spots first...")
+            print("Running spot definition tool first...")
             return define_parking_spots(IMAGE_PATH, spots_path)
             
         with open(spots_path, "rb") as f:
@@ -74,8 +75,8 @@ class ParkingLotAnalyzer:
         
         # Calculate occupation score (weighted combination of features)
         edge_score = edge_density * self.config['edge_weight']
-        brightness_score = (1 - brightness) * self.config['brightness_weight']  # darker spots are typically occupied
-        saturation_score = saturation * self.config['saturation_weight']  # more color often means a car is present
+        brightness_score = (1 - brightness) * self.config['brightness_weight']
+        saturation_score = saturation * self.config['saturation_weight']
         
         occupation_score = edge_score + brightness_score + saturation_score
         
@@ -167,6 +168,7 @@ class ParkingLotAnalyzer:
         
         # Display result
         cv2.imshow("Parking Spot Detection", result_image)
+        print("\nPress any key to exit...")
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         
@@ -262,34 +264,50 @@ def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     cv2.destroyAllWindows()
     return rectangles
 
-def main():
-    """Main function to run when script is executed"""
+# For use with pre-defined spots from the original example
+def create_sample_parking_spots():
+    """Create a sample parking spots file with some pre-defined spots"""
+    sample_spots = [
+        (100, 100, 150, 150),
+        (200, 100, 250, 150),
+        (300, 100, 350, 150),
+        (400, 100, 450, 150),
+        (100, 200, 150, 250),
+        (200, 200, 250, 250),
+        (300, 200, 350, 250),
+        (400, 200, 450, 250)
+    ]
+    with open(SPOTS_PATH, "wb") as f:
+        pickle.dump(sample_spots, f)
+    print(f"Created sample parking spots file at {SPOTS_PATH}")
+    return sample_spots
+
+if __name__ == "__main__":
     print("Parking Spot Detection Program")
     print(f"Using image: {IMAGE_PATH}")
     
+    # Check if the image exists
+    if not os.path.exists(IMAGE_PATH):
+        print(f"Error: Image file '{IMAGE_PATH}' not found!")
+        sys.exit(1)
+    
     # Check if spots file exists
     if not os.path.exists(SPOTS_PATH):
-        print("No parking spots defined yet. Opening spot definition tool...")
-        define_parking_spots(IMAGE_PATH, SPOTS_PATH)
-    
-    # Ask user what they want to do
-    while True:
-        print("\nOptions:")
-        print("1. Define/redefine parking spots")
-        print("2. Analyze parking lot")
-        print("3. Exit")
+        print("No parking spots defined yet.")
+        print("Do you want to:")
+        print("1. Define parking spots manually")
+        print("2. Use sample parking spots")
         
-        choice = input("Enter your choice (1-3): ")
+        choice = input("Enter your choice (1-2): ")
         
         if choice == '1':
             define_parking_spots(IMAGE_PATH, SPOTS_PATH)
         elif choice == '2':
-            analyzer = ParkingLotAnalyzer()
-            analyzer.analyze_parking_lot(IMAGE_PATH, SPOTS_PATH)
-        elif choice == '3':
-            break
+            create_sample_parking_spots()
         else:
-            print("Invalid choice. Please try again.")
-
-if __name__ == "__main__":
-    main()
+            print("Invalid choice. Using sample parking spots.")
+            create_sample_parking_spots()
+    
+    # Analyze the parking lot
+    analyzer = ParkingLotAnalyzer()
+    analyzer.analyze_parking_lot(IMAGE_PATH, SPOTS_PATH)
