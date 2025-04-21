@@ -2,8 +2,11 @@ import cv2
 import numpy as np
 import pickle
 import os
-import argparse
 from datetime import datetime
+
+# Fixed image path for your project
+IMAGE_PATH = "new_parking_lot.jpg"
+SPOTS_PATH = "parking_spots.pkl"
 
 class ParkingLotAnalyzer:
     def __init__(self, config=None):
@@ -27,7 +30,9 @@ class ParkingLotAnalyzer:
     def load_parking_spots(self, spots_path):
         """Load the parking spot coordinates"""
         if not os.path.exists(spots_path):
-            raise FileNotFoundError(f"Parking spots file not found: {spots_path}")
+            print(f"Parking spots file not found: {spots_path}")
+            print("Please define parking spots first...")
+            return define_parking_spots(IMAGE_PATH, spots_path)
             
         with open(spots_path, "rb") as f:
             return pickle.load(f)
@@ -138,7 +143,7 @@ class ParkingLotAnalyzer:
         print(f"Occupied spots: {len(spots_data) - free_spaces}")
         print(f"Occupancy rate: {((len(spots_data) - free_spaces) / len(spots_data) * 100):.1f}%")
     
-    def analyze_parking_lot(self, image_path, spots_path, output_path=None):
+    def analyze_parking_lot(self, image_path, spots_path):
         """Main function to analyze parking lot"""
         # Load data
         img = self.load_image(image_path)
@@ -159,11 +164,6 @@ class ParkingLotAnalyzer:
         
         # Visualize results
         result_image = self.visualize_results(img, spots_data, rectangles)
-        
-        # Save output if requested
-        if output_path:
-            cv2.imwrite(output_path, result_image)
-            print(f"Result saved to {output_path}")
         
         # Display result
         cv2.imshow("Parking Spot Detection", result_image)
@@ -263,42 +263,33 @@ def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     return rectangles
 
 def main():
-    parser = argparse.ArgumentParser(description="Parking Lot Analysis Tool")
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    """Main function to run when script is executed"""
+    print("Parking Spot Detection Program")
+    print(f"Using image: {IMAGE_PATH}")
     
-    # Define parking spots command
-    define_parser = subparsers.add_parser("define", help="Define parking spots on an image")
-    define_parser.add_argument("image", help="Path to the parking lot image")
-    define_parser.add_argument("--output", "-o", default="parking_spots.pkl", 
-                              help="Output file to save parking spot coordinates")
+    # Check if spots file exists
+    if not os.path.exists(SPOTS_PATH):
+        print("No parking spots defined yet. Opening spot definition tool...")
+        define_parking_spots(IMAGE_PATH, SPOTS_PATH)
     
-    # Analyze parking lot command
-    analyze_parser = subparsers.add_parser("analyze", help="Analyze parking lot occupancy")
-    analyze_parser.add_argument("image", help="Path to the parking lot image")
-    analyze_parser.add_argument("--spots", "-s", default="parking_spots.pkl", 
-                               help="File containing parking spot coordinates")
-    analyze_parser.add_argument("--output", "-o", help="Output file to save result image")
-    analyze_parser.add_argument("--threshold", "-t", type=float, default=0.55,
-                               help="Occupation threshold (default: 0.55)")
-    
-    args = parser.parse_args()
-    
-    if args.command == "define":
-        define_parking_spots(args.image, args.output)
-    
-    elif args.command == "analyze":
-        analyzer = ParkingLotAnalyzer({
-            'occupation_threshold': args.threshold,
-            'edge_weight': 0.6,
-            'brightness_weight': 0.2,
-            'saturation_weight': 0.2,
-            'resize_dimensions': (1280, 720),
-            'show_details': True
-        })
-        analyzer.analyze_parking_lot(args.image, args.spots, args.output)
-    
-    else:
-        parser.print_help()
+    # Ask user what they want to do
+    while True:
+        print("\nOptions:")
+        print("1. Define/redefine parking spots")
+        print("2. Analyze parking lot")
+        print("3. Exit")
+        
+        choice = input("Enter your choice (1-3): ")
+        
+        if choice == '1':
+            define_parking_spots(IMAGE_PATH, SPOTS_PATH)
+        elif choice == '2':
+            analyzer = ParkingLotAnalyzer()
+            analyzer.analyze_parking_lot(IMAGE_PATH, SPOTS_PATH)
+        elif choice == '3':
+            break
+        else:
+            print("Invalid choice. Please try again.")
 
 if __name__ == "__main__":
     main()
