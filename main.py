@@ -35,9 +35,9 @@ for idx, rect in enumerate(rectangles, 1):
 
     edge_count = cv2.countNonZero(roi_thresh)
     brightness = np.mean(roi_orig)
-    score = edge_count / 1000 + (brightness / 255)
+    score = edge_count / 500 + (brightness / 255)
 
-    if score > 0.85:
+    if score > 1.0:
         status = "Occupied"
         color = (0, 0, 255)
     else:
