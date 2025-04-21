@@ -37,7 +37,7 @@ for idx, rect in enumerate(rectangles, 1):
     brightness = np.mean(roi_orig)
     score = edge_count / 500 + (brightness / 255)
 
-    if score > 1.0:
+    if score > 1.2:
         status = "Occupied"
         color = (0, 0, 255)
     else:
