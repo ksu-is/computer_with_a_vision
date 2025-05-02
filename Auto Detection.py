@@ -32,7 +32,7 @@ class ParkingLotAnalyzer:
         """Load the parking spot coordinates"""
         if not os.path.exists(spots_path):
             print(f"Parking spots file not found: {spots_path}")
-            print("Running spot definition tool first...")
+            print("Starting spot definition tool...")
             return define_parking_spots(IMAGE_PATH, spots_path)
             
         with open(spots_path, "rb") as f:
@@ -264,7 +264,7 @@ def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     cv2.destroyAllWindows()
     return rectangles
 
-# For use with pre-defined spots from the original example
+# Create sample parking spots if needed
 def create_sample_parking_spots():
     """Create a sample parking spots file with some pre-defined spots"""
     sample_spots = [
@@ -279,7 +279,7 @@ def create_sample_parking_spots():
     ]
     with open(SPOTS_PATH, "wb") as f:
         pickle.dump(sample_spots, f)
-    print(f"Created sample parking spots file at {SPOTS_PATH}")
+    print(f"Created sample parking spots file with 8 predefined spots")
     return sample_spots
 
 if __name__ == "__main__":
@@ -291,22 +291,10 @@ if __name__ == "__main__":
         print(f"Error: Image file '{IMAGE_PATH}' not found!")
         sys.exit(1)
     
-    # Check if spots file exists
+    # Check if spots file exists, create sample if it doesn't
     if not os.path.exists(SPOTS_PATH):
-        print("No parking spots defined yet.")
-        print("Do you want to:")
-        print("1. Define parking spots manually")
-        print("2. Use sample parking spots")
-        
-        choice = input("Enter your choice (1-2): ")
-        
-        if choice == '1':
-            define_parking_spots(IMAGE_PATH, SPOTS_PATH)
-        elif choice == '2':
-            create_sample_parking_spots()
-        else:
-            print("Invalid choice. Using sample parking spots.")
-            create_sample_parking_spots()
+        print("No parking spots defined. Creating sample parking spots...")
+        create_sample_parking_spots()
     
     # Analyze the parking lot
     analyzer = ParkingLotAnalyzer()
