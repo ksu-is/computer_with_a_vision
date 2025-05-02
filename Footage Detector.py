@@ -5,11 +5,187 @@ import os
 import sys
 import argparse
 from datetime import datetime
+from sklearn.cluster import DBSCAN
 
 # Default paths for your project (can be overridden with command line arguments)
 VIDEO_PATH = "Parking Footage.mp4"
 IMAGE_PATH = "new_parking_lot.jpg"
 SPOTS_PATH = "parking_spots.pkl"
+
+class ParkingSpotDetector:
+    """AI-based parking spot detector that automatically identifies parking spaces"""
+    
+    def __init__(self, config=None):
+        self.config = config or {
+            'min_area': 1000,          # Minimum area of contour to be considered a parking spot
+            'max_area': 25000,         # Maximum area of contour to be considered a parking spot
+            'aspect_ratio_range': (0.4, 3.0),  # Valid aspect ratio range for parking spots
+            'distance_threshold': 50,  # DBSCAN clustering distance threshold
+            'min_spots': 3,            # Minimum spots required for a valid cluster
+            'resize_dimensions': (1280, 720)
+        }
+    
+    def load_image(self, image_path):
+        """Load and resize the input image"""
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image not found: {image_path}")
+            
+        img = cv2.imread(image_path)
+        return cv2.resize(img, self.config['resize_dimensions'])
+    
+    def detect_parking_spots(self, img):
+        """Detect parking spots using AI-based computer vision techniques"""
+        print("Detecting parking spots using AI...")
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Apply bilateral filter to reduce noise while preserving edges
+        blur = cv2.bilateralFilter(gray, 11, 17, 17)
+        
+        # Apply adaptive thresholding to handle different lighting conditions
+        thresh = cv2.adaptiveThreshold(
+            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY_INV, 19, 2
+        )
+        
+        # Find edges using Canny
+        edges = cv2.Canny(thresh, 50, 150)
+        
+        # Dilate to connect nearby edges
+        kernel = np.ones((3, 3), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=1)
+        
+        # Find contours
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter contours by area and aspect ratio
+        valid_contours = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if self.config['min_area'] < area < self.config['max_area']:
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = float(w) / h
+                if self.config['aspect_ratio_range'][0] < aspect_ratio < self.config['aspect_ratio_range'][1]:
+                    valid_contours.append((x, y, x + w, y + h))
+        
+        # Use DBSCAN for clustering similar rectangles
+        if not valid_contours:
+            print("No valid contours found. Try adjusting detection parameters.")
+            return []
+            
+        # Extract centers of rectangles for clustering
+        centers = np.array([[int((x1 + x2) / 2), int((y1 + y2) / 2)] for x1, y1, x2, y2 in valid_contours])
+        
+        # Apply DBSCAN clustering
+        clustering = DBSCAN(eps=self.config['distance_threshold'], min_samples=self.config['min_spots']).fit(centers)
+        
+        # Find average rectangle size in each cluster
+        clusters = {}
+        for i, label in enumerate(clustering.labels_):
+            if label == -1:  # Skip noise
+                continue
+                
+            if label not in clusters:
+                clusters[label] = []
+                
+            clusters[label].append(valid_contours[i])
+        
+        # Calculate average rectangle for each cluster
+        parking_spots = []
+        for label, rectangles in clusters.items():
+            avg_width = int(np.mean([x2 - x1 for x1, y1, x2, y2 in rectangles]))
+            avg_height = int(np.mean([y2 - y1 for x1, y1, x2, y2 in rectangles]))
+            
+            # Use the rectangles as individual parking spots
+            for x1, y1, x2, y2 in rectangles:
+                # Standardize rectangle sizes slightly for better detection
+                center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
+                half_width, half_height = avg_width // 2, avg_height // 2
+                
+                # Create a slightly adjusted rectangle
+                adj_x1 = max(0, center_x - half_width)
+                adj_y1 = max(0, center_y - half_height)
+                adj_x2 = min(img.shape[1], center_x + half_width)
+                adj_y2 = min(img.shape[0], center_y + half_height)
+                
+                parking_spots.append((adj_x1, adj_y1, adj_x2, adj_y2))
+        
+        # Remove overlapping rectangles
+        parking_spots = self._remove_overlapping_rectangles(parking_spots)
+        
+        print(f"Detected {len(parking_spots)} parking spots")
+        return parking_spots
+    
+    def _remove_overlapping_rectangles(self, rectangles, overlap_threshold=0.5):
+        """Remove overlapping rectangles"""
+        if not rectangles:
+            return []
+            
+        def calculate_iou(rect1, rect2):
+            """Calculate Intersection over Union for two rectangles"""
+            x1_1, y1_1, x2_1, y2_1 = rect1
+            x1_2, y1_2, x2_2, y2_2 = rect2
+            
+            # Calculate intersection area
+            x_left = max(x1_1, x1_2)
+            y_top = max(y1_1, y1_2)
+            x_right = min(x2_1, x2_2)
+            y_bottom = min(y2_1, y2_2)
+            
+            if x_right < x_left or y_bottom < y_top:
+                return 0.0
+                
+            intersection_area = (x_right - x_left) * (y_bottom - y_top)
+            
+            # Calculate union area
+            rect1_area = (x2_1 - x1_1) * (y2_1 - y1_1)
+            rect2_area = (x2_2 - x1_2) * (y2_2 - y1_2)
+            union_area = rect1_area + rect2_area - intersection_area
+            
+            return intersection_area / union_area
+        
+        # Sort rectangles by area (largest first)
+        rectangles = sorted(rectangles, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), reverse=True)
+        
+        filtered_rectangles = []
+        for rect in rectangles:
+            should_keep = True
+            
+            for existing_rect in filtered_rectangles:
+                if calculate_iou(rect, existing_rect) > overlap_threshold:
+                    should_keep = False
+                    break
+                    
+            if should_keep:
+                filtered_rectangles.append(rect)
+                
+        return filtered_rectangles
+    
+    def visualize_detected_spots(self, img, parking_spots):
+        """Visualize detected parking spots"""
+        img_display = img.copy()
+        
+        for idx, (x1, y1, x2, y2) in enumerate(parking_spots, 1):
+            # Draw rectangle
+            cv2.rectangle(img_display, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            
+            # Add spot number
+            cv2.putText(img_display, f"{idx}", (x1 + 5, y1 + 20),
+                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Add summary information
+        cv2.putText(img_display, f"Detected: {len(parking_spots)} spots", (30, 40),
+                  cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 2)
+        
+        return img_display
+    
+    def save_parking_spots(self, parking_spots, output_path):
+        """Save detected parking spots to a file"""
+        with open(output_path, "wb") as f:
+            pickle.dump(parking_spots, f)
+        print(f"Saved {len(parking_spots)} parking spots to {output_path}")
+
 
 class ParkingLotAnalyzer:
     def __init__(self, config=None):
@@ -34,12 +210,32 @@ class ParkingLotAnalyzer:
         """Resize a video frame"""
         return cv2.resize(frame, self.config['resize_dimensions'])
         
-    def load_parking_spots(self, spots_path):
-        """Load the parking spot coordinates"""
+    def load_parking_spots(self, spots_path, image_path):
+        """Load or detect parking spots using AI"""
         if not os.path.exists(spots_path):
             print(f"Parking spots file not found: {spots_path}")
-            print("Running spot definition tool first...")
-            return define_parking_spots(IMAGE_PATH, spots_path)
+            print("Using AI to automatically detect parking spots...")
+            
+            # Load the reference image
+            img = self.load_image(image_path)
+            
+            # Use the AI detector to find parking spots
+            detector = ParkingSpotDetector()
+            parking_spots = detector.detect_parking_spots(img)
+            
+            # Visualize the detected spots
+            result_image = detector.visualize_detected_spots(img, parking_spots)
+            
+            # Show the results
+            cv2.imshow("AI Detected Parking Spots", result_image)
+            print("Press any key to continue with these detected spots...")
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            
+            # Save the detected spots
+            detector.save_parking_spots(parking_spots, spots_path)
+            
+            return parking_spots
             
         with open(spots_path, "rb") as f:
             return pickle.load(f)
@@ -154,7 +350,7 @@ class ParkingLotAnalyzer:
         """Main function to analyze parking lot"""
         # Load data
         img = self.load_image(image_path)
-        rectangles = self.load_parking_spots(spots_path)
+        rectangles = self.load_parking_spots(spots_path, image_path)
         
         # Process image
         processed_images = self.preprocess_image(img)
@@ -199,8 +395,12 @@ class ParkingLotAnalyzer:
             os.makedirs(screenshots_dir)
             print(f"Created screenshots directory: {screenshots_dir}")
         
-        # Load parking spots
-        rectangles = self.load_parking_spots(spots_path)
+        # Extract first frame for AI detection if needed
+        first_frame_path = "first_frame.jpg"
+        extract_first_frame(video_path, first_frame_path)
+        
+        # Load or detect parking spots with AI
+        rectangles = self.load_parking_spots(spots_path, first_frame_path)
         
         # Open video capture
         cap = cv2.VideoCapture(video_path)
@@ -338,113 +538,6 @@ class ParkingLotAnalyzer:
         
         return spots_data
 
-def define_parking_spots(image_path, output_path="parking_spots.pkl"):
-    """Interactive tool to define parking spots on an image"""
-    rectangles = []
-    drawing = False
-    start_point = None
-    
-    def mouse_callback(event, x, y, flags, param):
-        nonlocal drawing, start_point, img_copy
-        
-        if event == cv2.EVENT_LBUTTONDOWN:
-            drawing = True
-            start_point = (x, y)
-            img_copy = img.copy()
-            
-        elif event == cv2.EVENT_MOUSEMOVE and drawing:
-            img_temp = img_copy.copy()
-            cv2.rectangle(img_temp, start_point, (x, y), (0, 255, 0), 2)
-            cv2.imshow("Define Parking Spots", img_temp)
-            
-        elif event == cv2.EVENT_LBUTTONUP and drawing:
-            drawing = False
-            end_point = (x, y)
-            
-            # Ensure coordinates are in correct order (top-left, bottom-right)
-            x1, y1 = min(start_point[0], end_point[0]), min(start_point[1], end_point[1])
-            x2, y2 = max(start_point[0], end_point[0]), max(start_point[1], end_point[1])
-            
-            rectangles.append((x1, y1, x2, y2))
-            
-            # Draw the rectangle on the image
-            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img, str(len(rectangles)), (x1+5, y1+20), 
-                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.imshow("Define Parking Spots", img)
-    
-    # Load and resize image
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(f"Image not found: {image_path}")
-    
-    img = cv2.resize(img, (1280, 720))
-    img_copy = img.copy()
-    
-    # Setup window and callback
-    cv2.namedWindow("Define Parking Spots")
-    cv2.setMouseCallback("Define Parking Spots", mouse_callback)
-    cv2.imshow("Define Parking Spots", img)
-    
-    print("\n=== Parking Spot Definition Tool ===")
-    print("Click and drag to define parking spots")
-    print("Press 's' to save and exit")
-    print("Press 'c' to clear all spots")
-    print("Press 'r' to remove the last spot")
-    print("Press 'q' to quit without saving")
-    
-    while True:
-        key = cv2.waitKey(1) & 0xFF
-        
-        if key == ord('s'):  # Save
-            with open(output_path, "wb") as f:
-                pickle.dump(rectangles, f)
-            print(f"Saved {len(rectangles)} parking spots to {output_path}")
-            break
-            
-        elif key == ord('c'):  # Clear all
-            rectangles = []
-            img = cv2.imread(image_path)
-            img = cv2.resize(img, (1280, 720))
-            img_copy = img.copy()
-            cv2.imshow("Define Parking Spots", img)
-            print("Cleared all parking spots")
-            
-        elif key == ord('r') and rectangles:  # Remove last
-            rectangles.pop()
-            img = cv2.imread(image_path)
-            img = cv2.resize(img, (1280, 720))
-            for i, (x1, y1, x2, y2) in enumerate(rectangles, 1):
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img, str(i), (x1+5, y1+20), 
-                          cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            img_copy = img.copy()
-            cv2.imshow("Define Parking Spots", img)
-            print(f"Removed last spot, {len(rectangles)} remaining")
-            
-        elif key == ord('q'):  # Quit without saving
-            break
-    
-    cv2.destroyAllWindows()
-    return rectangles
-
-def create_sample_parking_spots():
-    """Create a sample parking spots file with some pre-defined spots"""
-    sample_spots = [
-        (100, 100, 150, 150),
-        (200, 100, 250, 150),
-        (300, 100, 350, 150),
-        (400, 100, 450, 150),
-        (100, 200, 150, 250),
-        (200, 200, 250, 250),
-        (300, 200, 350, 250),
-        (400, 200, 450, 250)
-    ]
-    with open(SPOTS_PATH, "wb") as f:
-        pickle.dump(sample_spots, f)
-    print(f"Created sample parking spots file at {SPOTS_PATH}")
-    return sample_spots
-
 def extract_first_frame(video_path, output_path="first_frame.jpg"):
     """Extract first frame from video for spot definition"""
     if not os.path.exists(video_path):
@@ -470,10 +563,9 @@ if __name__ == "__main__":
     parser.add_argument('--video', default=VIDEO_PATH, help='Path to the video file')
     parser.add_argument('--image', default=IMAGE_PATH, help='Path to reference image for defining spots')
     parser.add_argument('--spots', default=SPOTS_PATH, help='Path to parking spots definition file')
-    parser.add_argument('--define-spots', action='store_true', help='Force redefining parking spots')
-    parser.add_argument('--use-sample', action='store_true', help='Use sample parking spots')
-    parser.add_argument('--speed', type=float, default=1.0, choices=[0.25, 0.5, 1.0, 2.0], 
-                        help='Playback speed (0.25, 0.5, 1.0, or 2.0)')
+    parser.add_argument('--redetect', action='store_true', help='Force re-detecting parking spots using AI')
+    parser.add_argument('--speed', type=float, default=1.0, 
+                        help='Playback speed (e.g., 0.25, 0.5, 1.0, 2.0)')
     parser.add_argument('--screenshot-interval', type=int, default=5, 
                         help='Interval between automatic screenshots (seconds)')
     
@@ -484,7 +576,7 @@ if __name__ == "__main__":
     IMAGE_PATH = args.image
     SPOTS_PATH = args.spots
     
-    print("Parking Spot Detection Program - Video Edition")
+    print("Parking Spot Detection Program - AI-Powered Edition")
     print(f"Using video: {VIDEO_PATH}")
     
     # Check if the video exists
@@ -500,14 +592,10 @@ if __name__ == "__main__":
         first_frame_path = extract_first_frame(VIDEO_PATH, first_frame_path)
         IMAGE_PATH = first_frame_path
     
-    # Handle parking spots definition
-    if args.define_spots or not os.path.exists(SPOTS_PATH):
-        if args.use_sample:
-            print("Using sample parking spots.")
-            create_sample_parking_spots()
-        else:
-            print("Running spot definition tool...")
-            define_parking_spots(IMAGE_PATH, SPOTS_PATH)
+    # Remove existing spots file if redetection is requested
+    if args.redetect and os.path.exists(SPOTS_PATH):
+        os.remove(SPOTS_PATH)
+        print(f"Removed existing spots file for re-detection: {SPOTS_PATH}")
     
     # Show settings before starting
     print(f"\nSettings:")
