@@ -4,7 +4,6 @@ import pickle
 import os
 import sys
 from datetime import datetime
-from sklearn.cluster import DBSCAN
 
 # Fixed image path for your project
 IMAGE_PATH = "new_parking_lot.jpg"
@@ -33,8 +32,8 @@ class ParkingLotAnalyzer:
         """Load the parking spot coordinates"""
         if not os.path.exists(spots_path):
             print(f"Parking spots file not found: {spots_path}")
-            print("Detecting parking spots automatically...")
-            return auto_detect_parking_spots(IMAGE_PATH, spots_path)
+            print("Running spot definition tool first...")
+            return define_parking_spots(IMAGE_PATH, spots_path)
             
         with open(spots_path, "rb") as f:
             return pickle.load(f)
@@ -175,221 +174,6 @@ class ParkingLotAnalyzer:
         
         return spots_data, result_image
 
-def auto_detect_parking_spots(image_path, output_path="parking_spots.pkl"):
-    """Automatically detect parking spots in an image using lines and contours"""
-    print("Automatically detecting parking spots...")
-    
-    # Load and resize image
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(f"Image not found: {image_path}")
-    
-    img = cv2.resize(img, (1280, 720))
-    img_original = img.copy()
-    
-    # Convert to grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Apply blurring to reduce noise
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # Apply Canny edge detection
-    edges = cv2.Canny(blur, 50, 150)
-    
-    # Dilate the edges to connect nearby edges
-    kernel = np.ones((3, 3), np.uint8)
-    dilated = cv2.dilate(edges, kernel, iterations=1)
-    
-    # Find contours
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Filter contours by area and shape
-    min_area = 1000  # Minimum area for a parking spot
-    max_area = 15000  # Maximum area for a parking spot
-    potential_spots = []
-    
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if min_area < area < max_area:
-            # Approximate the contour to a polygon
-            epsilon = 0.04 * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            
-            # If it has 4 vertices, it could be a rectangle
-            if len(approx) >= 4 and len(approx) <= 6:
-                # Get bounding rectangle
-                x, y, w, h = cv2.boundingRect(approx)
-                
-                # Check if the shape is approximately a rectangle (aspect ratio)
-                aspect_ratio = float(w) / h
-                if 0.2 < aspect_ratio < 5:
-                    # Draw the rectangle for visualization
-                    cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    
-                    # Add to potential spots
-                    potential_spots.append((x, y, x + w, y + h))
-    
-    # If few spots were found, try an alternative method
-    if len(potential_spots) < 5:
-        print("Few spots detected with contour method, trying line detection...")
-        img = img_original.copy()
-        
-        # Apply thresholding to create binary image
-        _, thresh = cv2.threshold(blur, 100, 255, cv2.THRESH_BINARY_INV)
-        
-        # Apply morphological operations to enhance lines
-        kernel = np.ones((3, 3), np.uint8)
-        morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=1)
-        
-        # Find lines using Hough Line Transform
-        lines = cv2.HoughLinesP(morph, 1, np.pi/180, threshold=100, minLineLength=100, maxLineGap=50)
-        
-        # Create a blank image for line visualization
-        line_img = np.zeros_like(img)
-        
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                cv2.line(line_img, (x1, y1), (x2, y2), (255, 255, 255), 2)
-        
-        # Dilate the lines to connect nearby lines
-        line_img_gray = cv2.cvtColor(line_img, cv2.COLOR_BGR2GRAY)
-        kernel = np.ones((5, 5), np.uint8)
-        dilated_lines = cv2.dilate(line_img_gray, kernel, iterations=2)
-        
-        # Find contours in the dilated line image
-        contours, _ = cv2.findContours(dilated_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter and create parking spots from the contours
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if 500 < area < 20000:
-                x, y, w, h = cv2.boundingRect(contour)
-                aspect_ratio = float(w) / h
-                if 0.2 < aspect_ratio < 5:
-                    cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-                    potential_spots.append((x, y, x + w, y + h))
-    
-    # If still too few spots, try a grid-based approach
-    if len(potential_spots) < 8:
-        print("Still few spots detected, applying a grid-based approach...")
-        img = img_original.copy()
-        
-        # Detect parking lot area using edge density
-        edges_copy = edges.copy()
-        kernel = np.ones((15, 15), np.uint8)
-        edge_density = cv2.dilate(edges_copy, kernel, iterations=1)
-        
-        # Find the regions with high edge density
-        _, thresh_density = cv2.threshold(edge_density, 50, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh_density, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Find the largest contour (likely the parking area)
-        max_area = 0
-        parking_area = None
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area > max_area:
-                max_area = area
-                parking_area = contour
-        
-        if parking_area is not None:
-            # Get bounding rectangle of the parking area
-            x, y, w, h = cv2.boundingRect(parking_area)
-            
-            # Parameters for grid creation
-            spot_width = w // 4  # Assume 4 spots horizontally
-            spot_height = h // 5  # Assume 5 spots vertically
-            
-            # Create a grid of parking spots
-            for row in range(5):
-                for col in range(4):
-                    spot_x = x + col * spot_width
-                    spot_y = y + row * spot_height
-                    cv2.rectangle(img, (spot_x, spot_y), 
-                                 (spot_x + spot_width, spot_y + spot_height), 
-                                 (0, 255, 0), 2)
-                    potential_spots.append((spot_x, spot_y, 
-                                          spot_x + spot_width, spot_y + spot_height))
-    
-    # Cluster similar rectangles and merge them
-    if len(potential_spots) > 0:
-        # Convert rectangles to centers for clustering
-        centers = np.array([[rect[0] + (rect[2] - rect[0])//2, 
-                            rect[1] + (rect[3] - rect[1])//2] 
-                           for rect in potential_spots])
-        
-        # Apply DBSCAN clustering
-        clustering = DBSCAN(eps=50, min_samples=1).fit(centers)
-        labels = clustering.labels_
-        
-        # Group rectangles by cluster
-        clusters = {}
-        for i, label in enumerate(labels):
-            if label not in clusters:
-                clusters[label] = []
-            clusters[label].append(potential_spots[i])
-        
-        # Merge rectangles in each cluster
-        merged_spots = []
-        for label, rects in clusters.items():
-            if len(rects) > 0:
-                # Find the average dimensions
-                avg_x1 = sum(rect[0] for rect in rects) // len(rects)
-                avg_y1 = sum(rect[1] for rect in rects) // len(rects)
-                avg_x2 = sum(rect[2] for rect in rects) // len(rects)
-                avg_y2 = sum(rect[3] for rect in rects) // len(rects)
-                
-                merged_spots.append((avg_x1, avg_y1, avg_x2, avg_y2))
-        
-        # Final check: ensure we have a reasonable number of spots
-        if 5 <= len(merged_spots) <= 30:
-            # Save the detected spots
-            with open(output_path, "wb") as f:
-                pickle.dump(merged_spots, f)
-            
-            print(f"Detected and saved {len(merged_spots)} parking spots to {output_path}")
-            
-            # For visualization
-            img_display = img_original.copy()
-            for i, (x1, y1, x2, y2) in enumerate(merged_spots, 1):
-                cv2.rectangle(img_display, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(img_display, str(i), (x1 + 5, y1 + 20),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            cv2.imshow("Detected Parking Spots", img_display)
-            cv2.waitKey(500)  # Just briefly show the spots before continuing
-            cv2.destroyAllWindows()
-            
-            return merged_spots
-        else:
-            print(f"Detected {len(merged_spots)} spots, which seems unreasonable. Using grid approach instead.")
-    
-    # If all else fails, create a default grid of spots
-    print("Using default grid of parking spots...")
-    img_height, img_width = img.shape[:2]
-    
-    # Create a 4x5 grid of parking spots
-    grid_spots = []
-    cols, rows = 4, 5
-    spot_width = img_width // cols
-    spot_height = img_height // rows
-    
-    for row in range(rows):
-        for col in range(cols):
-            x1 = col * spot_width
-            y1 = row * spot_height
-            x2 = x1 + spot_width
-            y2 = y1 + spot_height
-            grid_spots.append((x1, y1, x2, y2))
-    
-    # Save the grid spots
-    with open(output_path, "wb") as f:
-        pickle.dump(grid_spots, f)
-    
-    print(f"Created a default grid with {len(grid_spots)} parking spots")
-    return grid_spots
-
 def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     """Interactive tool to define parking spots on an image"""
     rectangles = []
@@ -480,6 +264,24 @@ def define_parking_spots(image_path, output_path="parking_spots.pkl"):
     cv2.destroyAllWindows()
     return rectangles
 
+# For use with pre-defined spots from the original example
+def create_sample_parking_spots():
+    """Create a sample parking spots file with some pre-defined spots"""
+    sample_spots = [
+        (100, 100, 150, 150),
+        (200, 100, 250, 150),
+        (300, 100, 350, 150),
+        (400, 100, 450, 150),
+        (100, 200, 150, 250),
+        (200, 200, 250, 250),
+        (300, 200, 350, 250),
+        (400, 200, 450, 250)
+    ]
+    with open(SPOTS_PATH, "wb") as f:
+        pickle.dump(sample_spots, f)
+    print(f"Created sample parking spots file at {SPOTS_PATH}")
+    return sample_spots
+
 if __name__ == "__main__":
     print("Parking Spot Detection Program")
     print(f"Using image: {IMAGE_PATH}")
@@ -489,10 +291,22 @@ if __name__ == "__main__":
         print(f"Error: Image file '{IMAGE_PATH}' not found!")
         sys.exit(1)
     
-    # Remove existing spots file to force re-detection
-    if os.path.exists(SPOTS_PATH):
-        os.remove(SPOTS_PATH)
-        print("Removed existing parking spots file for fresh detection")
+    # Check if spots file exists
+    if not os.path.exists(SPOTS_PATH):
+        print("No parking spots defined yet.")
+        print("Do you want to:")
+        print("1. Define parking spots manually")
+        print("2. Use sample parking spots")
+        
+        choice = input("Enter your choice (1-2): ")
+        
+        if choice == '1':
+            define_parking_spots(IMAGE_PATH, SPOTS_PATH)
+        elif choice == '2':
+            create_sample_parking_spots()
+        else:
+            print("Invalid choice. Using sample parking spots.")
+            create_sample_parking_spots()
     
     # Analyze the parking lot
     analyzer = ParkingLotAnalyzer()
