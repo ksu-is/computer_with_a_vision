@@ -13,17 +13,27 @@ IMAGE_PATH = "new_parking_lot.jpg"
 SPOTS_PATH = "parking_spots.pkl"
 
 class ParkingSpotDetector:
-    """AI-based parking spot detector that automatically identifies parking spaces"""
+    """AI-based parking spot detector that automatically identifies parked cars"""
     
     def __init__(self, config=None):
         self.config = config or {
-            'min_area': 1000,          # Minimum area of contour to be considered a parking spot
-            'max_area': 25000,         # Maximum area of contour to be considered a parking spot
-            'aspect_ratio_range': (0.4, 3.0),  # Valid aspect ratio range for parking spots
+            'min_area': 4000,          # Minimum area of contour to be considered a car
+            'max_area': 50000,         # Maximum area of contour to be considered a car
+            'aspect_ratio_range': (0.4, 2.5),  # Valid aspect ratio range for cars
             'distance_threshold': 50,  # DBSCAN clustering distance threshold
-            'min_spots': 3,            # Minimum spots required for a valid cluster
-            'resize_dimensions': (1280, 720)
+            'min_spots': 2,            # Minimum spots required for a valid cluster
+            'resize_dimensions': (1280, 720),
+            'yolo_confidence': 0.35    # Confidence threshold for YOLO detection
         }
+        # Initialize paths for Cascade Classifier for car detection
+        self.car_cascade_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
+                              'haarcascade_car.xml')
+        # Download cascade file if it doesn't exist
+        if not os.path.exists(self.car_cascade_path):
+            print("Haar cascade file for cars not found. Using backup detection methods.")
+            self.car_cascade = None
+        else:
+            self.car_cascade = cv2.CascadeClassifier(self.car_cascade_path)
     
     def load_image(self, image_path):
         """Load and resize the input image"""
@@ -34,9 +44,59 @@ class ParkingSpotDetector:
         return cv2.resize(img, self.config['resize_dimensions'])
     
     def detect_parking_spots(self, img):
-        """Detect parking spots using AI-based computer vision techniques"""
-        print("Detecting parking spots using AI...")
+        """Detect parked cars using multiple techniques for robustness"""
+        print("Detecting parked cars using AI...")
         
+        # We'll combine multiple detection methods for better results
+        spots_from_cascade = self._detect_with_haar_cascade(img)
+        spots_from_contours = self._detect_with_contours(img)
+        spots_from_color_segmentation = self._detect_with_color_segmentation(img)
+        
+        # Combine all detected spots
+        print(f"Detected {len(spots_from_cascade)} cars with Haar cascade")
+        print(f"Detected {len(spots_from_contours)} cars with contour analysis")
+        print(f"Detected {len(spots_from_color_segmentation)} cars with color segmentation")
+        
+        all_spots = spots_from_cascade + spots_from_contours + spots_from_color_segmentation
+        
+        # If we still don't have enough spots, use a grid approach as fallback
+        if len(all_spots) < 5:
+            print("Not enough cars detected. Using grid-based fallback approach...")
+            grid_spots = self._generate_grid_spots(img)
+            all_spots.extend(grid_spots)
+            print(f"Added {len(grid_spots)} grid-based spots")
+        
+        # Remove overlapping rectangles
+        parking_spots = self._remove_overlapping_rectangles(all_spots, overlap_threshold=0.3)
+        
+        print(f"Final count: {len(parking_spots)} unique parking spots detected")
+        return parking_spots
+    
+    def _detect_with_haar_cascade(self, img):
+        """Detect cars using Haar Cascade classifier"""
+        detected_spots = []
+        
+        # Skip if cascade classifier not available
+        if self.car_cascade is None:
+            return detected_spots
+            
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Detect cars
+        cars = self.car_cascade.detectMultiScale(gray, 1.1, 3)
+        
+        for (x, y, w, h) in cars:
+            area = w * h
+            aspect_ratio = float(w) / h
+            
+            if (self.config['min_area'] < area < self.config['max_area'] and 
+                self.config['aspect_ratio_range'][0] < aspect_ratio < self.config['aspect_ratio_range'][1]):
+                detected_spots.append((x, y, x + w, y + h))
+        
+        return detected_spots
+    
+    def _detect_with_contours(self, img):
+        """Detect cars by analyzing contours"""
         # Convert to grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
@@ -54,7 +114,7 @@ class ParkingSpotDetector:
         
         # Dilate to connect nearby edges
         kernel = np.ones((3, 3), np.uint8)
-        dilated = cv2.dilate(edges, kernel, iterations=1)
+        dilated = cv2.dilate(edges, kernel, iterations=2)
         
         # Find contours
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -69,53 +129,78 @@ class ParkingSpotDetector:
                 if self.config['aspect_ratio_range'][0] < aspect_ratio < self.config['aspect_ratio_range'][1]:
                     valid_contours.append((x, y, x + w, y + h))
         
-        # Use DBSCAN for clustering similar rectangles
-        if not valid_contours:
-            print("No valid contours found. Try adjusting detection parameters.")
-            return []
-            
-        # Extract centers of rectangles for clustering
-        centers = np.array([[int((x1 + x2) / 2), int((y1 + y2) / 2)] for x1, y1, x2, y2 in valid_contours])
+        return valid_contours
+    
+    def _detect_with_color_segmentation(self, img):
+        """Detect cars using color segmentation"""
+        detected_spots = []
         
-        # Apply DBSCAN clustering
-        clustering = DBSCAN(eps=self.config['distance_threshold'], min_samples=self.config['min_spots']).fit(centers)
+        # Convert to HSV for better color segmentation
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         
-        # Find average rectangle size in each cluster
-        clusters = {}
-        for i, label in enumerate(clustering.labels_):
-            if label == -1:  # Skip noise
-                continue
-                
-            if label not in clusters:
-                clusters[label] = []
-                
-            clusters[label].append(valid_contours[i])
+        # Define color ranges for common car colors (will detect most cars)
+        color_ranges = [
+            # Dark colors (black, dark gray, dark blue)
+            (np.array([0, 0, 0]), np.array([180, 255, 60])),
+            # Red colors
+            (np.array([0, 100, 100]), np.array([10, 255, 255])),
+            (np.array([170, 100, 100]), np.array([180, 255, 255])),
+            # Silver/gray/white
+            (np.array([0, 0, 150]), np.array([180, 30, 255])),
+            # Blue
+            (np.array([100, 50, 50]), np.array([130, 255, 255])),
+        ]
         
-        # Calculate average rectangle for each cluster
-        parking_spots = []
-        for label, rectangles in clusters.items():
-            avg_width = int(np.mean([x2 - x1 for x1, y1, x2, y2 in rectangles]))
-            avg_height = int(np.mean([y2 - y1 for x1, y1, x2, y2 in rectangles]))
-            
-            # Use the rectangles as individual parking spots
-            for x1, y1, x2, y2 in rectangles:
-                # Standardize rectangle sizes slightly for better detection
-                center_x, center_y = (x1 + x2) // 2, (y1 + y2) // 2
-                half_width, half_height = avg_width // 2, avg_height // 2
-                
-                # Create a slightly adjusted rectangle
-                adj_x1 = max(0, center_x - half_width)
-                adj_y1 = max(0, center_y - half_height)
-                adj_x2 = min(img.shape[1], center_x + half_width)
-                adj_y2 = min(img.shape[0], center_y + half_height)
-                
-                parking_spots.append((adj_x1, adj_y1, adj_x2, adj_y2))
+        # Create a binary mask for cars
+        car_mask = np.zeros((img.shape[0], img.shape[1]), dtype=np.uint8)
         
-        # Remove overlapping rectangles
-        parking_spots = self._remove_overlapping_rectangles(parking_spots)
+        # Apply color thresholds
+        for lower, upper in color_ranges:
+            color_mask = cv2.inRange(hsv, lower, upper)
+            car_mask = cv2.bitwise_or(car_mask, color_mask)
         
-        print(f"Detected {len(parking_spots)} parking spots")
-        return parking_spots
+        # Apply morphological operations to clean up the mask
+        kernel = np.ones((5, 5), np.uint8)
+        car_mask = cv2.morphologyEx(car_mask, cv2.MORPH_CLOSE, kernel)
+        car_mask = cv2.morphologyEx(car_mask, cv2.MORPH_OPEN, kernel)
+        
+        # Find contours in the mask
+        contours, _ = cv2.findContours(car_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Filter contours to identify car regions
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if self.config['min_area'] < area < self.config['max_area']:
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = float(w) / h
+                if self.config['aspect_ratio_range'][0] < aspect_ratio < self.config['aspect_ratio_range'][1]:
+                    detected_spots.append((x, y, x + w, y + h))
+        
+        return detected_spots
+    
+    def _generate_grid_spots(self, img):
+        """Generate a grid of potential parking spots as a fallback method"""
+        height, width = img.shape[:2]
+        
+        # Define a typical car size (adjust as needed for your parking lot)
+        car_width = 80
+        car_height = 160
+        
+        # Calculate grid dimensions
+        cols = width // car_width
+        rows = height // car_height
+        
+        # Create spots grid
+        grid_spots = []
+        for row in range(rows):
+            for col in range(cols):
+                x1 = col * car_width
+                y1 = row * car_height
+                x2 = x1 + car_width
+                y2 = y1 + car_height
+                grid_spots.append((x1, y1, x2, y2))
+        
+        return grid_spots
     
     def _remove_overlapping_rectangles(self, rectangles, overlap_threshold=0.5):
         """Remove overlapping rectangles"""
@@ -162,6 +247,51 @@ class ParkingSpotDetector:
                 
         return filtered_rectangles
     
+    def _remove_overlapping_rectangles(self, rectangles, overlap_threshold=0.5):
+        """Remove overlapping rectangles"""
+        if not rectangles:
+            return []
+            
+        def calculate_iou(rect1, rect2):
+            """Calculate Intersection over Union for two rectangles"""
+            x1_1, y1_1, x2_1, y2_1 = rect1
+            x1_2, y1_2, x2_2, y2_2 = rect2
+            
+            # Calculate intersection area
+            x_left = max(x1_1, x1_2)
+            y_top = max(y1_1, y1_2)
+            x_right = min(x2_1, x2_2)
+            y_bottom = min(y2_1, y2_2)
+            
+            if x_right < x_left or y_bottom < y_top:
+                return 0.0
+                
+            intersection_area = (x_right - x_left) * (y_bottom - y_top)
+            
+            # Calculate union area
+            rect1_area = (x2_1 - x1_1) * (y2_1 - y1_1)
+            rect2_area = (x2_2 - x1_2) * (y2_2 - y1_2)
+            union_area = rect1_area + rect2_area - intersection_area
+            
+            return intersection_area / union_area
+        
+        # Sort rectangles by area (largest first)
+        rectangles = sorted(rectangles, key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), reverse=True)
+        
+        filtered_rectangles = []
+        for rect in rectangles:
+            should_keep = True
+            
+            for existing_rect in filtered_rectangles:
+                if calculate_iou(rect, existing_rect) > overlap_threshold:
+                    should_keep = False
+                    break
+                    
+            if should_keep:
+                filtered_rectangles.append(rect)
+                
+        return filtered_rectangles
+        
     def visualize_detected_spots(self, img, parking_spots):
         """Visualize detected parking spots"""
         img_display = img.copy()
@@ -547,15 +677,63 @@ def extract_first_frame(video_path, output_path="first_frame.jpg"):
     if not cap.isOpened():
         raise Exception(f"Error opening video stream: {video_path}")
     
-    ret, frame = cap.read()
-    if ret:
-        cv2.imwrite(output_path, frame)
-        print(f"Extracted first frame to {output_path}")
-    else:
-        raise Exception("Failed to extract first frame from video")
+    # Try to extract a good frame with cars (not just the first frame)
+    best_frame = None
+    frame_count = 0
+    max_frames_to_check = 100  # Check up to 100 frames to find a good one
+    
+    print("Extracting a good reference frame with cars...")
+    
+    while frame_count < max_frames_to_check:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        frame_count += 1
+        
+        # Skip every other frame for speed
+        if frame_count % 10 != 0:
+            continue
+            
+        # Simple check - frames with more edges are likely to have more cars
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_count = cv2.countNonZero(edges)
+        
+        # Save the frame with the most edges
+        if best_frame is None or edge_count > best_edge_count:
+            best_frame = frame.copy()
+            best_edge_count = edge_count
+    
+    # If we didn't find any frames, use the first frame
+    if best_frame is None:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ret, best_frame = cap.read()
+        if not ret:
+            raise Exception("Failed to extract any frame from video")
+    
+    cv2.imwrite(output_path, best_frame)
+    print(f"Extracted reference frame to {output_path}")
     
     cap.release()
     return output_path
+
+def download_haar_cascade():
+    """Download the Haar cascade file for car detection if it doesn't exist"""
+    cascade_url = "https://raw.githubusercontent.com/andrewssobral/vehicle_detection_haarcascades/master/cars.xml"
+    cascade_file = "haarcascade_car.xml"
+    
+    if not os.path.exists(cascade_file):
+        try:
+            import urllib.request
+            print(f"Downloading Haar cascade file for car detection...")
+            urllib.request.urlretrieve(cascade_url, cascade_file)
+            print(f"Downloaded Haar cascade file to {cascade_file}")
+            return True
+        except Exception as e:
+            print(f"Failed to download Haar cascade file: {e}")
+            return False
+    return True
 
 if __name__ == "__main__":
     # Set up command line argument parsing
@@ -568,6 +746,8 @@ if __name__ == "__main__":
                         help='Playback speed (e.g., 0.25, 0.5, 1.0, 2.0)')
     parser.add_argument('--screenshot-interval', type=int, default=5, 
                         help='Interval between automatic screenshots (seconds)')
+    parser.add_argument('--min-spots', type=int, default=8,
+                        help='Minimum number of parking spots to detect (default: 8)')
     
     args = parser.parse_args()
     
@@ -579,16 +759,19 @@ if __name__ == "__main__":
     print("Parking Spot Detection Program - AI-Powered Edition")
     print(f"Using video: {VIDEO_PATH}")
     
+    # Try to download the Haar cascade file for better car detection
+    download_haar_cascade()
+    
     # Check if the video exists
     if not os.path.exists(VIDEO_PATH):
         print(f"Error: Video file '{VIDEO_PATH}' not found!")
         sys.exit(1)
     
-    # Extract first frame for spot definition if needed
+    # Extract frame with cars for spot definition if needed
     first_frame_path = "first_frame.jpg"
     if not os.path.exists(IMAGE_PATH):
         print(f"Reference image '{IMAGE_PATH}' not found.")
-        print("Extracting first frame from video...")
+        print("Extracting frame with cars from video...")
         first_frame_path = extract_first_frame(VIDEO_PATH, first_frame_path)
         IMAGE_PATH = first_frame_path
     
@@ -601,6 +784,7 @@ if __name__ == "__main__":
     print(f"\nSettings:")
     print(f"- Playback speed: {args.speed}x")
     print(f"- Screenshot interval: {args.screenshot_interval} seconds")
+    print(f"- Minimum parking spots: {args.min_spots}")
     print("\nControls:")
     print("  q - Quit")
     print("  + - Increase speed")
